@@ -1,0 +1,32 @@
+# 依赖目录，体积大且可以用 npm install 还原
+node_modules/
+
+# 环境变量：包含数据库密码、JWT 密钥、管理员初始密码
+# 这是整个项目最不能进仓库的东西
+.env
+.env.local
+.env.*.local
+
+# 构建产物，每次 build 都会重新生成
+client/dist/
+server/dist/
+
+# 用户上传的图片。属于运行时数据，不属于源码
+server/uploads/*
+# 但保留目录本身，否则新克隆下来没有这个文件夹
+!server/uploads/.gitkeep
+
+# 日志
+*.log
+npm-debug.log*
+logs/
+
+# 编辑器与系统文件
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# WorkBuddy 的会话与记忆数据
+.workbuddy/
