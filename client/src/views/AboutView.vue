@@ -69,11 +69,11 @@ const skills = [
       <ul class="info-list">
         <li>
           <span class="info-key">邮箱</span>
-          <span>your-mail@example.com</span>
+          <span>3404098011@qq.com</span>
         </li>
         <li>
           <span class="info-key">GitHub</span>
-          <span>github.com/your-name</span>
+          <span>github.com/fengluo-dd</span>
         </li>
       </ul>
     </section>
