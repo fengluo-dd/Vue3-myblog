@@ -16,6 +16,10 @@ USE blog_db;
 -- ------------------------------------------------------------
 -- 1. users 用户表
 --    role 只有两种：admin（我，能进后台）/ reader（注册访客）
+--    is_owner=1 的那一行是「主管理员」（根账号），全站最多一个：
+--      普通管理员不能改它的角色、也不能删它，否则后台会被别人接管。
+--      唯一索引用函数索引实现：is_owner=1 时取 1，否则取 NULL，
+--      而唯一索引允许多个 NULL，所以只有那唯一一行 1 受约束。
 --    password_hash 存 bcrypt 哈希（60 字符），长度留到 100 方便将来换算法
 -- ------------------------------------------------------------
 CREATE TABLE users (
@@ -23,8 +27,10 @@ CREATE TABLE users (
   username      VARCHAR(50)  NOT NULL COMMENT '登录名',
   password_hash VARCHAR(100) NOT NULL COMMENT 'bcrypt 哈希，绝不存明文',
   role          ENUM('admin','reader') NOT NULL DEFAULT 'reader' COMMENT '角色',
+  is_owner      TINYINT(1)   NOT NULL DEFAULT 0 COMMENT '1=主管理员（根账号，不可被后台接口修改或删除）',
   created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '注册时间',
-  UNIQUE KEY uk_username (username)
+  UNIQUE KEY uk_username (username),
+  UNIQUE KEY uk_single_owner ((IF(is_owner = 1, 1, NULL)))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户表';
 
 -- ------------------------------------------------------------

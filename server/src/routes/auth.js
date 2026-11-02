@@ -39,6 +39,10 @@ const captchaLimiter = rateLimit({
 
 // 签发 token。payload 只放身份标识，绝不放密码。
 // 注意 JWT 的 payload 只是 base64 编码，不是加密，谁拿到都能解开看。
+//
+// 这里刻意**不放** isOwner：权限相关的字段一旦进了 token 就变成快照，
+// 库里的值改了它不会跟着改。后台的 requireAdmin 每次都查库拿最新角色，
+// token 只负责回答「你是谁」这一个问题。
 function signToken(user) {
   return jwt.sign(
     { id: user.id, username: user.username, role: user.role },
@@ -98,7 +102,7 @@ router.post('/register', registerLimiter, async (req, res, next) => {
       [name, hash, 'reader']
     )
 
-    const user = { id: result.insertId, username: name, role: 'reader' }
+    const user = { id: result.insertId, username: name, role: 'reader', isOwner: false }
 
     res.json({ code: 0, data: { token: signToken(user), user } })
   } catch (err) {
@@ -134,7 +138,14 @@ router.post('/login', loginLimiter, async (req, res, next) => {
       return res.status(401).json({ code: 401, message: '用户名或密码不对' })
     }
 
-    const user = { id: record.id, username: record.username, role: record.role }
+    const user = {
+      id: record.id,
+      username: record.username,
+      role: record.role,
+      // is_owner 是「主管理员」标记：根账号，后台任何接口都不能改它的角色或删除它。
+      // 前端靠这个字段决定要不要给这一行显示操作按钮。
+      isOwner: Number(record.is_owner) === 1
+    }
 
     res.json({ code: 0, data: { token: signToken(user), user } })
   } catch (err) {
@@ -145,9 +156,36 @@ router.post('/login', loginLimiter, async (req, res, next) => {
 /**
  * GET /api/auth/me
  * 拿当前登录用户。前端刷新页面时用它验证本地 token 还有没有效。
+ *
+ * 必须查库而不是直接返回 req.user：
+ *   req.user 来自 token，里面的 role / isOwner 都是签发时的旧值。
+ *   如果这期间账号被降级，直接回 token 内容会让前端仍然以为自己是管理员，
+ *   页面能进、请求全 403，现象比直接说「你不是管理员」更让人困惑。
  */
-router.get('/me', requireAuth, (req, res) => {
-  res.json({ code: 0, data: req.user })
+router.get('/me', requireAuth, async (req, res, next) => {
+  try {
+    const [rows] = await pool.query(
+      'SELECT id, username, role, is_owner AS isOwner FROM users WHERE id = ?',
+      [req.user.id]
+    )
+
+    if (rows.length === 0) {
+      return res.status(401).json({ code: 401, message: '账号不存在，请重新登录' })
+    }
+
+    const u = rows[0]
+    res.json({
+      code: 0,
+      data: {
+        id: u.id,
+        username: u.username,
+        role: u.role,
+        isOwner: Number(u.isOwner) === 1
+      }
+    })
+  } catch (err) {
+    next(err)
+  }
 })
 
 export default router

@@ -8,7 +8,6 @@ const userStore = useUserStore()
 
 // 当前登录的人。用来标记「当前登录」，也用来隐藏自己的操作按钮
 const myId = computed(() => userStore.user?.id)
-const myRole = computed(() => userStore.user?.role)
 
 const users = ref([])
 const loading = ref(true)
@@ -129,6 +128,9 @@ function initial(name) {
               <span class="urole" :class="{ 'is-admin': user.role === 'admin' }">
                 {{ user.role === 'admin' ? '管理员' : '读者' }}
               </span>
+              <!-- 主管理员徽章。这个身份来自数据库的 is_owner 字段，
+                   不是靠「名字叫 admin」猜的 —— 用户名随时能改，身份不能。 -->
+              <span v-if="user.isOwner" class="uowner">主管理员</span>
               <span v-if="user.id === myId" class="uself">当前登录</span>
             </div>
             <div class="umeta">
@@ -142,9 +144,13 @@ function initial(name) {
           <!-- 自己的那一行不给操作按钮。
                后端也会拒（400），但界面先不给，省得用户白点一次 -->
           <template v-if="user.id === myId">
-            <span class="uhint">
-              {{ myRole === 'admin' ? '不能修改或删除自己' : '' }}
-            </span>
+            <span class="uhint">不能修改或删除自己</span>
+          </template>
+
+          <!-- 主管理员是根账号：别人改了它，后台就等于易主了。
+               后端会返回 403 兜住，这里同样先不给按钮。 -->
+          <template v-else-if="user.isOwner">
+            <span class="uhint">主管理员账号受保护</span>
           </template>
 
           <template v-else>
@@ -166,7 +172,8 @@ function initial(name) {
 
     <p class="tips">
       说明：删除账号会连带删掉这个人发过的全部留言（数据库外键级联）。<br />
-      不能修改或删除自己，也不能把最后一个管理员降级 —— 否则后台就再没人进得来了。
+      不能修改或删除自己，也不能把最后一个管理员降级 —— 否则后台就再没人进得来了。<br />
+      标了「主管理员」的账号是根账号，任何人都不能改它的角色或删除它。
     </p>
   </div>
 </template>
@@ -305,6 +312,18 @@ function initial(name) {
   color: var(--accent);
   border-color: rgba(240, 168, 104, 0.3);
   background-color: var(--accent-dim);
+}
+
+/* 主管理员用实心橙色，和普通管理员的「描边徽章」区分开，
+   一眼就能看出哪个账号是不能动的那个 */
+.uowner {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border-radius: 3px;
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  color: var(--bg-deep);
+  background-color: var(--accent);
 }
 
 .uself {

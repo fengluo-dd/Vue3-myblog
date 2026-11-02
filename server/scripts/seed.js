@@ -20,14 +20,34 @@ if (!PLAIN_PASSWORD) {
 }
 
 async function main() {
+  // 先看库里是不是已经有主管理员了。
+  // 这一步必须在 INSERT 之前：唯一索引 uk_single_owner 只允许一行 is_owner=1，
+  // 如果已经有人占了这个位置，再插一个 1 会直接报 Duplicate entry。
+  const [ownerRows] = await pool.query('SELECT id FROM users WHERE is_owner = 1')
+  const hasOwner = ownerRows.length > 0
+
   // 1. 建账号。密码只存 bcrypt 哈希，数据库里看不到明文
+  //    is_owner = 1 表示这是「主管理员」：它是这套系统的根账号，
+  //    后台接口不允许改它的角色、也不允许删它。
+  //    ON DUPLICATE KEY UPDATE 里**故意不写** is_owner：
+  //    重跑 seed 只重置密码，不去抢别人的主管理员身份。
   const hash = await bcrypt.hash(PLAIN_PASSWORD, 10)
   await pool.query(
-    `INSERT INTO users (username, password_hash, role)
-     VALUES (?, ?, 'admin')
+    `INSERT INTO users (username, password_hash, role, is_owner)
+     VALUES (?, ?, 'admin', ?)
      ON DUPLICATE KEY UPDATE password_hash = VALUES(password_hash)`,
-    [USERNAME, hash]
+    [USERNAME, hash, hasOwner ? 0 : 1]
   )
+
+  // 兜底：如果库里一个主管理员都没有（比如历史数据迁移漏了），
+  // 把最早创建的那个管理员补成主管理员，否则这套保护就没有落点。
+  if (!hasOwner) {
+    await pool.query(
+      `UPDATE users SET is_owner = 1
+        WHERE id = (SELECT id FROM (SELECT MIN(id) AS id FROM users WHERE role = 'admin') AS t)`
+    )
+    console.log('库里没有主管理员，已把最早创建的管理员标记为主管理员')
+  }
 
   const [users] = await pool.query('SELECT id FROM users WHERE username = ?', [USERNAME])
   const userId = users[0].id

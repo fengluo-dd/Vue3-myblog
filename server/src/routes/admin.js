@@ -413,17 +413,23 @@ router.get('/users', async (req, res, next) => {
       SELECT u.id,
              u.username,
              u.role,
+             u.is_owner AS isOwner,
              u.created_at AS createdAt,
              COUNT(c.id) AS commentCount
       FROM users u
       LEFT JOIN comments c ON c.user_id = u.id
-      GROUP BY u.id, u.username, u.role, u.created_at
+      GROUP BY u.id, u.username, u.role, u.is_owner, u.created_at
       ORDER BY u.role ASC, u.id ASC
     `)
 
     res.json({
       code: 0,
-      data: rows.map((u) => ({ ...u, commentCount: Number(u.commentCount) }))
+      data: rows.map((u) => ({
+        ...u,
+        commentCount: Number(u.commentCount),
+        // 统一成布尔，前端 v-if 直接写 user.isOwner 就行
+        isOwner: Number(u.isOwner) === 1
+      }))
     })
   } catch (err) {
     next(err)
@@ -434,10 +440,17 @@ router.get('/users', async (req, res, next) => {
  * PATCH /api/admin/users/:id
  * 改角色。body: { role: 'admin' | 'reader' }
  *
- * 三条保护，都是为了不让人把自己锁在门外：
+ * 四条保护，都是为了不让人把后台的钥匙弄丢：
  *   1. 不能改自己的角色 —— 手滑把自己降成 reader，就再也进不来后台了
- *   2. 不能把最后一个管理员降级 —— 那样全站再没有能管后台的人
- *   3. 角色只能是这两个固定值
+ *   2. 不能改主管理员的角色 —— 这是修复过的漏洞：以前只要「还剩一个管理员」就放行，
+ *      于是 A 被设为管理员之后，反手就能把主管理员降成读者，后台直接易主
+ *   3. 不能把最后一个管理员降级 —— 那样全站再没有能管后台的人
+ *   4. 角色只能是这两个固定值
+ *
+ * 第 2 条为什么这么严格（连主管理员自己都改不了自己）：
+ *   根账号的角色是这套系统的最后一道保险，它应该是「不可变」的，
+ *   而不是「只有某个人能改」。真要换人，走数据库/运维操作，
+ *   那种操作会留下记录，也不会被一次误点触发。
  */
 router.patch('/users/:id', async (req, res, next) => {
   try {
@@ -456,13 +469,28 @@ router.patch('/users/:id', async (req, res, next) => {
       return res.status(400).json({ code: 400, message: '不能修改自己的角色' })
     }
 
-    const [rows] = await pool.query('SELECT id, role FROM users WHERE id = ?', [id])
+    // 注意这里要查 is_owner：判断「能不能动这个人」靠的是数据库里的身份，
+    // 不是前端传上来的任何东西。前端隐藏按钮只是体验，真正的门在这里。
+    const [rows] = await pool.query(
+      'SELECT id, role, is_owner AS isOwner FROM users WHERE id = ?',
+      [id]
+    )
     if (rows.length === 0) {
       return res.status(404).json({ code: 404, message: '用户不存在' })
     }
 
+    const target = rows[0]
+
+    // 主管理员是根账号，任何人都不能改它的角色（包括同样是管理员的人）
+    if (Number(target.isOwner) === 1) {
+      return res.status(403).json({
+        code: 403,
+        message: '主管理员账号受保护，不能修改其角色'
+      })
+    }
+
     // 要降级的是个管理员，就得先确认降完之后还剩不剩别的管理员
-    if (rows[0].role === 'admin' && role === 'reader') {
+    if (target.role === 'admin' && role === 'reader') {
       const [[{ otherAdmins }]] = await pool.query(
         'SELECT COUNT(*) AS otherAdmins FROM users WHERE role = ? AND id <> ?',
         ['admin', id]
@@ -485,7 +513,12 @@ router.patch('/users/:id', async (req, res, next) => {
 
 /**
  * DELETE /api/admin/users/:id
- * 删用户。保护两条：不能删自己、不能删最后一个管理员。
+ * 删用户。保护三条：不能删自己、不能删主管理员、不能删最后一个管理员。
+ *
+ * 主管理员这一条和第 3 条不是重复的：
+ *   主管理员被降级还能救回来（改库或者用另一个管理员升回去），
+ *   但主管理员被删掉就彻底没有了 —— 账号连同他发过的留言一起消失，
+ *   这个后果比降级更重，所以单独拦一次。
  *
  * 注意：comments 的外键是 ON DELETE CASCADE，
  * 删掉用户会连带删掉他发过的全部留言，所以返回值里带上被删的留言条数，
@@ -502,9 +535,19 @@ router.delete('/users/:id', async (req, res, next) => {
       return res.status(400).json({ code: 400, message: '不能删除自己的账号' })
     }
 
-    const [rows] = await pool.query('SELECT id, role FROM users WHERE id = ?', [id])
+    const [rows] = await pool.query(
+      'SELECT id, role, is_owner AS isOwner FROM users WHERE id = ?',
+      [id]
+    )
     if (rows.length === 0) {
       return res.status(404).json({ code: 404, message: '用户不存在' })
+    }
+
+    if (Number(rows[0].isOwner) === 1) {
+      return res.status(403).json({
+        code: 403,
+        message: '主管理员账号受保护，不能删除'
+      })
     }
 
     if (rows[0].role === 'admin') {
