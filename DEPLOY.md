@@ -195,7 +195,44 @@ mysql -e "FLUSH PRIVILEGES;"
 mysql -u blog -p -e "USE blog_db; SHOW TABLES;"
 ```
 
-输入刚才设的密码，应该能列出 `users`、`posts`、`comments`、`albums` 等表。
+输入刚才设的密码，应该能列出 `users`、`posts`、`comments` 等表。
+
+> `albums` 表这会儿**还没有**，它是迁移 002 才建的，下一步补上。
+
+### 5.3 执行数据库迁移（**最容易漏的一步**）
+
+`db/schema.sql` 只是建库时的**初始快照**，之后每次改表结构都单独放在 `db/migrations/` 里。
+只跑 `schema.sql` 不跑迁移，会出现这种典型症状：
+
+> 网站首页能打开、文章详情页也能打开，但**列表页空白**，接口报 `500 服务器内部错误`。
+
+原因是列表查询的 SQL 里写到了 `type`、`parent_id` 这些**迁移才加上去的列**，
+而库里没有这些列，MySQL 直接抛 `Unknown column`。
+（详情页用的是 `SELECT *`，不点名要哪个列，所以反而"正常"。）
+
+```bash
+cd /var/www/blog/server
+node scripts/migrate.mjs
+```
+
+期望输出（首次）：
+```
+已执行：001_add_post_type.sql（2 条语句）
+已执行：002_add_albums.sql（1 条语句）
+已执行：003_add_comment_replies.sql（3 条语句）
+已执行：004_disable_comment_moderation.sql（2 条语句）
+迁移完成
+```
+
+脚本靠一张 `schema_migrations` 表记录跑过哪些文件，**重复执行是安全的**，已跑过的会显示"跳过"。
+
+验证：
+```bash
+mysql -u blog -p -e "USE blog_db; DESCRIBE posts;" | grep type
+mysql -u blog -p -e "USE blog_db; SHOW TABLES;" | grep albums
+```
+
+两条都要有输出，缺一条就说明迁移没跑完。
 
 ---
 
@@ -387,6 +424,7 @@ curl -I http://127.0.0.1:3000
 | `npm install` 卡住不动 | npm 源还是国外的 | `npm config set registry https://registry.npmmirror.com` |
 | 本机 curl 通，手机打不开 | 安全组没放行 3000 | 第 10 步 |
 | 页面能打开但没数据 | `.env` 数据库配置错，或没导 schema | `pm2 logs blog` 看报错 |
+| **首页列表空白、接口 500，但文章详情页能开** | **只跑了 `schema.sql`，没跑 `db/migrations` 里的迁移** | **第 5.3 步 `node scripts/migrate.mjs`** |
 | `EADDRINUSE` 端口被占用 | 有旧进程还在跑 | `pm2 list` 找到后 `pm2 delete <name>` |
 | `502` / 网站突然挂了 | 进程被 OOM 杀了 | `free -h` 看内存，`pm2 logs blog` 看日志，确认 swap 已启用 |
 | SSH 断开后网站没了 | 没用 pm2，直接跑的 node | 第 9 步 |
